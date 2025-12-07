@@ -82,14 +82,14 @@ public class MoBackup {
                     StorageScreenBase<?> s) -> new PickupUpgradeTab.Advanced(uc, p, s,
                             net.p3pp3rf1y.sophisticatedbackpacks.Config.SERVER.advancedPickupUpgrade.slotsInRow.get(),
                             SBPButtonDefinitions.BACKPACK_CONTENTS_FILTER_TYPE));
-            
+
             // 注册次元磁吸升级的高级过滤界面
             UpgradeGuiManager.registerTab(DIMENSIONAL_MAGNET_TYPE,
                     (MagnetUpgradeContainer uc, Position p, StorageScreenBase<?> s) -> new MagnetUpgradeTab.Advanced(uc,
                             p, s,
                             net.p3pp3rf1y.sophisticatedbackpacks.Config.SERVER.advancedMagnetUpgrade.slotsInRow.get(),
                             SBPButtonDefinitions.BACKPACK_CONTENTS_FILTER_TYPE));
-            
+
             // 注册次元卸货升级的高级过滤界面
             UpgradeGuiManager.registerTab(DIMENSIONAL_DEPOSIT_TYPE, (
                     DepositUpgradeContainer uc, Position p,
@@ -131,5 +131,77 @@ public class MoBackup {
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public void onPickupPost(EntityItemPickupEvent event) {
         com.kzjy.mobackup.core.PickupContext.pop();
+    }
+
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
+    public void onRightClickBlock(net.minecraftforge.event.entity.player.PlayerInteractEvent.RightClickBlock event) {
+        var player = event.getEntity();
+        if (player == null || !player.isShiftKeyDown()) {
+            return;
+        }
+        var stack = player.getItemInHand(event.getHand());
+        if (!(stack.getItem() instanceof net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackItem)) {
+            return;
+        }
+        var world = event.getLevel();
+        var pos = event.getPos();
+        stack.getCapability(net.p3pp3rf1y.sophisticatedbackpacks.api.CapabilityBackpackWrapper.getCapabilityInstance())
+                .ifPresent(wrapper -> {
+                    net.p3pp3rf1y.sophisticatedcore.api.IStorageWrapper storageWrapper = wrapper;
+                    var upgrades = storageWrapper.getUpgradeHandler().getWrappersThatImplement(
+                            net.p3pp3rf1y.sophisticatedbackpacks.api.IItemHandlerInteractionUpgrade.class);
+                    boolean hasDimensionalDeposit = upgrades.stream()
+                            .anyMatch(u -> u instanceof com.kzjy.mobackup.wrapper.DimensionalDepositUpgradeWrapper);
+                    if (!hasDimensionalDeposit) {
+                        return;
+                    }
+                    var state = world.getBlockState(pos);
+                    var key = state.getBlock().builtInRegistryHolder().key();
+                    boolean isRSBlock = key != null && "refinedstorage".equals(key.location().getNamespace());
+                    if (isRSBlock && world instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+                        var rsNetwork = com.refinedmods.refinedstorage.apiimpl.API.instance()
+                                .getNetworkManager(serverLevel).getNetwork(pos);
+                        if (rsNetwork == null || !rsNetwork.canRun()) {
+                            for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
+                                rsNetwork = com.refinedmods.refinedstorage.apiimpl.API.instance()
+                                        .getNetworkManager(serverLevel).getNetwork(pos.relative(dir));
+                                if (rsNetwork != null && rsNetwork.canRun()) {
+                                    break;
+                                }
+                            }
+                            if (rsNetwork == null || !rsNetwork.canRun()) {
+                                outer: for (net.minecraft.core.Direction dir1 : net.minecraft.core.Direction.values()) {
+                                    for (net.minecraft.core.Direction dir2 : net.minecraft.core.Direction.values()) {
+                                        rsNetwork = com.refinedmods.refinedstorage.apiimpl.API.instance()
+                                                .getNetworkManager(serverLevel)
+                                                .getNetwork(pos.relative(dir1).relative(dir2));
+                                        if (rsNetwork != null && rsNetwork.canRun()) {
+                                            break outer;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (rsNetwork != null && rsNetwork.canRun()) {
+                            final var targetNet = rsNetwork;
+                            upgrades.stream().filter(
+                                    u -> u instanceof com.kzjy.mobackup.wrapper.DimensionalDepositUpgradeWrapper)
+                                    .forEach(u -> {
+                                        u.onHandlerInteract(
+                                                new com.kzjy.mobackup.rs.RSInsertOnlyHandler(targetNet, player),
+                                                player);
+                                    });
+                            event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+                            event.setCanceled(true);
+                            return;
+                        }
+                        player.displayClientMessage(
+                                net.minecraft.network.chat.Component
+                                        .translatable("misc.refinedstorage.network_card.not_found"),
+                                true);
+                        event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+                        event.setCanceled(true);
+                    }
+                });
     }
 }
